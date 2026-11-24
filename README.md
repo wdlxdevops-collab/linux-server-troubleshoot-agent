@@ -245,7 +245,7 @@ tail -f watchdog.log
 - [ ] More Linux scenarios: disk full, failed services, DNS, memory
 
 ---
-
+![Visualization of the codebase](./diagram.svg)
 ## License
 
 Add a license of your choice (for example, MIT).
