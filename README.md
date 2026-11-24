@@ -267,6 +267,28 @@ tail -f watchdog.log
 
 ---
 ![Visualization of the codebase](./diagram.svg)
+```mermaid
+sequenceDiagram
+  actor You
+  participant CC as Claude Code
+  participant AG as agent.py
+  participant SF as safety.py
+  participant DK as Docker
+  You->>CC: nginx container is down
+  CC->>AG: container_logs("nginx")
+  AG->>DK: docker logs --tail 100
+  DK-->>AG: error output
+  CC->>AG: restart_container("nginx")
+  AG->>SF: is this action allowed?
+  alt allowed
+    SF-->>AG: ok
+    AG->>DK: docker restart nginx
+  else blocked
+    SF-->>AG: denied
+    AG-->>CC: escalate to Slack / Email
+  end
+  CC-->>You: summary + report
+```
 ## License
 
 Add a license of your choice (for example, MIT).
