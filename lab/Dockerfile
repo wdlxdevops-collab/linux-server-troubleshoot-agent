@@ -3,7 +3,7 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends apache2 procps iproute2 curl netcat-openbsd ca-certificates \
+    && apt-get install -y --no-install-recommends apache2 procps iproute2 net-tools curl wget netcat-openbsd ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Avoid the "Could not reliably determine the server's FQDN" warning.

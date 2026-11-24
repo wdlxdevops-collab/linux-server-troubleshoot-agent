@@ -10,12 +10,13 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 fail() { echo "SETUP FAILED: $*" >&2; exit 1; }
 
 echo "[1/4] Building image..."
-docker run -d --name "$NAME" -p 127.0.0.1:8080:80 "$IMAGE" >/dev/null \
+docker build -q -t "$IMAGE" "$DIR" >/dev/null \
   || fail "docker build failed. Check COPY paths and Dockerfile syntax in the error above."
 
 echo "[2/4] Starting container..."
 docker rm -f "$NAME" >/dev/null 2>&1 || true
-docker run -d --name "$NAME" -p 127.0.0.1:8080:80 "$IMAGE" >/dev/null \
+# --cpus/--memory cap the lab so CPU and memory fault scenarios can never overload your host.
+docker run -d --name "$NAME" -p 127.0.0.1:8080:80 --cpus 1 --memory 512m "$IMAGE" >/dev/null \
   || fail "container '$NAME' did not start."
 
 echo "[3/4] Checking and starting Apache..."

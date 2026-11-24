@@ -39,8 +39,22 @@ case "$SCENARIO" in
     run "sed -i 's#DocumentRoot /var/www/html#DocumentRoot /var/www/site#' /etc/apache2/sites-enabled/000-default.conf && apachectl -k graceful 2>/dev/null"
     SYMPTOM="The website on lab-server returns 'not found' for the home page."
     ;;
+  high-cpu)
+    reset
+    # Two busy loops; the container is capped at 1 CPU, so it shows ~100% CPU without hurting the host.
+    docker exec -d "$NAME" sh -c 'while :; do :; done'
+    docker exec -d "$NAME" sh -c 'while :; do :; done'
+    SYMPTOM="The website on lab-server is very slow and the server feels overloaded."
+    ;;
+  high-memory)
+    reset
+    # Holds ~300 MB of RAM in a shell variable; the container is capped at 512 MB.
+    docker exec -d "$NAME" sh -c 'cache=$(head -c 300M /dev/zero | tr "\0" a); sleep infinity'
+    sleep 5
+    SYMPTOM="lab-server is running low on memory and the website may become unstable."
+    ;;
   *)
-    echo "Usage: $0 {bad-config|permissions|port-conflict|wrong-root}" >&2
+    echo "Usage: $0 {bad-config|permissions|port-conflict|wrong-root|high-cpu|high-memory}" >&2
     exit 1
     ;;
 esac

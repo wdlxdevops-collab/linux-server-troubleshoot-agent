@@ -1,6 +1,10 @@
-# lab-server: known issues (human-verified)
+# lab-server: environment facts and known issues (human-verified)
 
-This file is the agent's long-term memory. Only add entries a human has verified.
+This file is loaded on every run, so keep it short. Detailed step-by-step checks live in the skills:
+- `apache-troubleshooting`: Apache down, config errors, HTTP 403/404/5xx
+- `resource-troubleshooting`: slow/overloaded server, high CPU, low memory
+- `network-troubleshooting`: curl, wget, netstat, ss; no response, timeouts, port problems
+
 Past incidents are hints, not answers: always confirm the cause with command output before concluding.
 
 ## Environment facts
@@ -8,29 +12,24 @@ Past incidents are hints, not answers: always confirm the cause with command out
 - So `docker logs lab-server` is normally empty. Apache logs are in /var/log/apache2/.
 - So after `docker start lab-server`, Apache does NOT start by itself.
 - The site is published on the host at http://localhost:8080 (container port 80).
+- The container is limited to 1 CPU and 512 MiB RAM.
 
-## Apache will not start
-- First check: `docker exec lab-server apachectl -t` (shows syntax errors with file and line number).
-- Seen before: an invalid line appended to /etc/apache2/apache2.conf.
-- Seen before: port 80 already used by another process. Check `docker exec lab-server ss -ltnp`.
+## Incidents seen before (verified)
+| Symptom | Root cause found | Key evidence |
+|---|---|---|
+| Apache down, will not start | Invalid line appended to /etc/apache2/apache2.conf | `apachectl -t` syntax error with line number |
+| Apache will not start, port 80 answers | `nc` holding port 80 | `netstat -tulnp` shows `nc` on :80 |
+| HTTP 403 | index.html mode 000 | `ls -l /var/www/html` |
+| HTTP 404 | DocumentRoot points to a missing folder | `grep -n DocumentRoot` in 000-default.conf |
+| No response at all (HTTP 000) | Container exited (code 137) | `docker inspect lab-server` State |
+| Slow, overloaded | Shell busy-loops using all CPU | `docker stats`, `ps aux --sort=-%cpu` |
+| Low memory | One process holding ~300 MB | `docker stats`, `ps aux --sort=-%mem` |
 
-## Site does not respond at all (HTTP 000)
-- First check: `docker inspect lab-server` (State.Status, ExitCode, OOMKilled, FinishedAt).
-- Seen before: container exited with code 137 (killed, e.g. `docker stop`).
-- The fix must include BOTH:
-  1. `docker start lab-server`
-  2. `docker exec lab-server apachectl -k start`
-
-## HTTP 403 Forbidden
-- Check file permissions: `docker exec lab-server ls -l /var/www/html`.
-- Seen before: index.html set to mode 000, so the www-data user cannot read it.
-
-## HTTP 404 Not Found
-- Check DocumentRoot: `docker exec lab-server grep -n DocumentRoot /etc/apache2/sites-enabled/000-default.conf`.
-- Seen before: DocumentRoot pointing to a folder that does not exist.
+For a stopped container, the fix must include BOTH `docker start lab-server` AND
+`docker exec lab-server apachectl -k start`.
 
 <!-- How to add an entry:
-1. The agent's report was verified correct by a human (or a human found the real cause).
-2. Add: symptom -> first check -> cause seen before -> fix.
+1. A human verified the root cause.
+2. Add one table row here. Put new step-by-step checks in the matching skill, not here.
 3. Write general guidance, not "the answer is always X".
 4. Re-run all scenarios to confirm nothing got worse. -->

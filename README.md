@@ -31,10 +31,11 @@ The agent **never changes the server**. It only reads, then recommends.
 ## Features
 
 - **Deny-by-default guardrail**: only read-only `docker` commands against `lab-server` are allowed; pipes, redirects, chaining and destructive commands are blocked.
-- **Single tool**: the model sees only the `Bash` tool; every call is checked by a `PreToolUse` hook.
+- **Two tools only**: `Bash` and `Skill`; every call is checked by a `PreToolUse` hook, and only the project's own skills are allowed.
 - **Cost and loop limits**: per-run budget cap (`max_budget_usd`) and turn limit (`max_turns`).
 - **Audit log**: every command (allowed or blocked) is recorded in `audit.jsonl`.
 - **Saved reports**: each successful run writes a Markdown report to `reports/`.
+- **Skills (runbooks)**: Apache, resource (CPU/RAM/load) and network (curl, wget, netstat, ss) runbooks in `.claude/skills/`, loaded only when relevant.
 - **Human-curated memory**: `CLAUDE.md` holds verified known issues and is loaded on every run; auto memory is disabled.
 - **Reproducible failure lab**: scripts build a healthy server and inject known faults.
 - **Watchdog**: a cron-friendly health check that runs the agent only when the site fails.
@@ -48,7 +49,11 @@ The agent **never changes the server**. It only reads, then recommends.
 .
 ├── agent.py            # The agent: model, tool, hooks, limits, audit log, report saving
 ├── safety.py           # Command allow-list (the guardrail)
-├── CLAUDE.md           # Human-verified known issues, loaded into every run
+├── CLAUDE.md           # Environment facts + verified incidents, loaded into every run
+├── .claude/skills/
+│   ├── apache-troubleshooting/SKILL.md
+│   ├── resource-troubleshooting/SKILL.md
+│   └── network-troubleshooting/SKILL.md
 ├── watchdog.sh         # Health check that triggers the agent on failure
 ├── requirements.txt
 ├── .env.example        # Configuration template (copy to .env)
@@ -141,6 +146,8 @@ The agent is read-only. Review the **Fix** section, run the commands, then run t
 | `permissions` | Website returns an error instead of the home page | `index.html` has mode `000` (HTTP 403) |
 | `port-conflict` | apache2 will not start, but something answers on port 80 | Another process (`nc`) holds port 80 |
 | `wrong-root` | Website returns "not found" | `DocumentRoot` points to a missing folder (HTTP 404) |
+| `high-cpu` | Website is very slow, server overloaded | Busy-loop processes using all CPU |
+| `high-memory` | Server running low on memory | One process holding ~300 MB RAM |
 | *(manual)* `docker stop lab-server` | Website does not respond at all | Container exited; Apache must be started after `docker start` |
 
 `setup_lab.sh` refuses to report healthy unless Apache returns **HTTP 200**, and `break.sh` will not inject a fault into an already-broken lab.
@@ -182,6 +189,19 @@ Keep it under ~200 lines: it is sent on every run, so every line costs tokens.
 
 ---
 
+## Skills (runbooks)
+
+Skills are step-by-step runbooks in `.claude/skills/<name>/SKILL.md`. Unlike `CLAUDE.md`, a skill is loaded **only when the agent needs it**, so detailed checks do not cost tokens on every run.
+
+| Skill | Used for |
+|---|---|
+| `apache-troubleshooting` | Apache down, config errors, HTTP 403/404/5xx |
+| `resource-troubleshooting` | Slow or overloaded server, high CPU, low memory |
+| `network-troubleshooting` | curl, wget, netstat, ss; no response, timeouts, port problems |
+
+At startup the agent prints `Skills loaded: [...]` and warns if any are missing.
+Only reviewed skills listed in `SKILLS` in `agent.py` can load. Never add skills that use `` !`command` `` dynamic context.
+
 ## Watchdog (unattended checks)
 
 `watchdog.sh` runs a free `curl` health check. It starts the agent **only** when the site fails, at most once per incident (30-minute cooldown), and never in parallel.
@@ -204,7 +224,8 @@ tail -f watchdog.log
 
 | Control | Where |
 |---|---|
-| Only the `Bash` tool is available | `tools=["Bash"]` in `agent.py` |
+| Only `Bash` and `Skill` tools are available | `tools=["Bash", "Skill"]` in `agent.py` |
+| Only the project's 3 reviewed skills can load | `skills=SKILLS` + hook check |
 | Every tool call checked before it runs, deny by default | `PreToolUse` hook → `safety.py` |
 | Only read-only commands inside `lab-server` | `safety.py` allow-list |
 | No pipes, redirects, chaining, substitution or globs | `safety.py` |

@@ -21,8 +21,14 @@ FORBIDDEN_CHARS: tuple[str, ...] = (";", "&", "|", ">", "<", "`", "$", "\n", "\\
 # Read-only commands allowed INSIDE the container (after `docker exec lab-server`).
 ALLOWED_INNER: frozenset[str] = frozenset(
     {
-        "cat", "ls", "ps", "df", "du", "free", "uptime", "ss", "stat",
-        "head", "tail", "grep", "id", "whoami", "hostname", "apachectl", "apache2ctl", "curl", "find",
+        # files, processes, disk
+        "cat", "ls", "ps", "df", "du", "stat", "head", "tail", "grep", "find", "id", "whoami", "hostname",
+        # CPU / memory / load
+        "free", "uptime", "nproc", "vmstat", "top",
+        # network
+        "ss", "netstat", "curl", "wget",
+        # apache
+        "apachectl", "apache2ctl",
     }
 )
 
@@ -31,11 +37,22 @@ BLOCKED_ARGS: dict[str, frozenset[str]] = {
     "find": frozenset({"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"}),
     "tail": frozenset({"-f", "-F", "--follow"}),
     "curl": frozenset({"-o", "--output", "-O", "--remote-name", "-T", "--upload-file", "-d", "--data", "-X", "--request", "-K", "--config"}),
+    "wget": frozenset({"-O", "--output-document", "-o", "--output-file", "-P", "--directory-prefix", "-i", "--input-file",
+                       "-r", "--recursive", "-m", "--mirror", "-e", "--execute", "--post-data", "--post-file", "--method"}),
 }
 
 # apachectl: config test, vhost/module listing, version only. No start/stop/restart/graceful.
 ALLOWED_APACHECTL_ARGS: frozenset[str] = frozenset({"-t", "-S", "-M", "-v", "-V", "configtest"})
-ALLOWED_CURL_HOSTS: tuple[str, ...] = ("http://localhost", "http://127.0.0.1")
+ALLOWED_HTTP_HOSTS: tuple[str, ...] = ("http://localhost", "http://127.0.0.1")
+
+# top must run once in batch mode, otherwise it is interactive and never exits.
+ALLOWED_TOP_ARGS: frozenset[str] = frozenset({
+    "-b -n 1", "-bn1", "-b -n1", "-bn 1",
+    "-b -n 1 -o %CPU", "-bn1 -o %CPU", "-b -n 1 -o %MEM", "-bn1 -o %MEM",
+})
+# netstat flags only (no -c: continuous mode never exits).
+NETSTAT_FLAG_CHARS: frozenset[str] = frozenset("tulnpaseirW")
+VMSTAT_MAX_INTERVAL, VMSTAT_MAX_COUNT = 2, 5
 
 
 class Decision(BaseModel):
@@ -60,6 +77,27 @@ def _check_inner(args: list[str]) -> Decision:
     for arg in rest:
         if arg in blocked or any(arg.startswith(b + "=") for b in blocked if b.startswith("--")):
             return _deny(f"Argument '{arg}' is not allowed for '{cmd}'.")
+        # Attached short-option values such as "-O/tmp/x" or "-ofile".
+        if cmd == "wget" and any(arg.startswith(b) and len(arg) > len(b) for b in blocked if not b.startswith("--")):
+            return _deny(f"Argument '{arg}' is not allowed for 'wget'.")
+
+    if cmd == "top" and " ".join(rest) not in ALLOWED_TOP_ARGS:
+        return _deny("Use 'top -b -n 1' (optionally '-o %CPU' or '-o %MEM'); interactive top never exits.")
+
+    if cmd == "netstat":
+        if not rest or any(not a.startswith("-") or a.startswith("--") or not set(a[1:]) <= NETSTAT_FLAG_CHARS for a in rest):
+            return _deny("Use netstat with short flags only, e.g. 'netstat -tulnp', 'netstat -an', 'netstat -s'.")
+
+    if cmd == "vmstat":
+        if len(rest) > 2 or any(not a.isdigit() for a in rest):
+            return _deny("Use 'vmstat' or 'vmstat <interval> <count>', e.g. 'vmstat 1 5'.")
+        if len(rest) >= 1 and int(rest[0]) > VMSTAT_MAX_INTERVAL:
+            return _deny(f"vmstat interval must be {VMSTAT_MAX_INTERVAL} seconds or less.")
+        if len(rest) == 2 and int(rest[1]) > VMSTAT_MAX_COUNT:
+            return _deny(f"vmstat count must be {VMSTAT_MAX_COUNT} or less.")
+
+    if cmd == "nproc" and rest:
+        return _deny("Use 'nproc' without arguments.")
 
     if cmd in {"apachectl", "apache2ctl"} and (not rest or any(a not in ALLOWED_APACHECTL_ARGS for a in rest)):
         return _deny(
@@ -67,10 +105,15 @@ def _check_inner(args: list[str]) -> Decision:
             "(no start, stop, restart or graceful)."
         )
 
-    if cmd == "curl":
-        urls = [a for a in rest if not a.startswith("-")]
-        if not urls or any(not u.startswith(ALLOWED_CURL_HOSTS) for u in urls):
-            return _deny("curl may only call http://localhost or http://127.0.0.1 inside the container.")
+    if cmd in {"curl", "wget"}:
+        urls = [a for a in rest if "://" in a]
+        values = [a for a in rest if not a.startswith("-") and "://" not in a]
+        if not urls or any(not u.startswith(ALLOWED_HTTP_HOSTS) for u in urls):
+            return _deny(f"{cmd} may only call http://localhost or http://127.0.0.1 inside the container.")
+        if any(not v.isdigit() for v in values):
+            return _deny(f"Unexpected {cmd} argument(s) {values}; only numeric option values (e.g. timeouts) are allowed.")
+        if cmd == "wget" and "--spider" not in rest:
+            return _deny("wget must use --spider (check only, never download). Example: 'wget -q -S --spider http://localhost'.")
 
     return Decision(allowed=True, reason="Read-only command inside lab container.")
 
@@ -111,10 +154,15 @@ def check_command(command: str) -> Decision:
             return _deny("Use 'docker inspect lab-server' without extra flags.")
         return Decision(allowed=True, reason=f"Read-only 'docker {sub}'.")
 
+    if sub == "stats":
+        if argv[2:] == ["--no-stream", CONTAINER]:
+            return Decision(allowed=True, reason="One-shot container CPU/memory usage.")
+        return _deny(f"Use exactly 'docker stats --no-stream {CONTAINER}' (without --no-stream it never exits).")
+
     if sub == "exec":
         # Strict form: docker exec lab-server <cmd> ... (no -it, -u, -e, -w or other flags).
         if len(argv) < 3 or argv[2] != CONTAINER:
             return _deny(f"Use exactly 'docker exec {CONTAINER} <command>' with no extra docker flags.")
         return _check_inner(argv[3:])
 
-    return _deny(f"'docker {sub}' is not allowed. Allowed: ps, logs, inspect, exec (read-only).")
+    return _deny(f"'docker {sub}' is not allowed. Allowed: ps, logs, inspect, stats, exec (read-only).")
