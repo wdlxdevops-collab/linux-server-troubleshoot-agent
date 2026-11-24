@@ -12,6 +12,7 @@ jobs:
       - uses: githubocto/repo-visualizer@main
         with:
           output_file: diagram.svg
-          excluded_globs: "**/__pycache__/**;reports/**;audit.jsonl"
-          file_colors: '{"py":"#3776AB","md":"#7F77DD","sh":"#1D9E75","jsonl":"#888780"}'
-          max_depth: 5
+          excluded_paths: ".github"
+          excluded_globs: "diagram.svg;.gitignore;**/__pycache__/**"
+          max_depth: 4
+          file_colors: '{"py":"#0078D4","md":"#5C2D91","sh":"#107C10","txt":"#CA5010","json":"#243A5E","jsonl":"#243A5E","svg":"#8A8886"}'
